@@ -1,5 +1,6 @@
 import { startTransition, useDeferredValue, useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import { clearAuthError, loginUser, logoutUser, registerUser, restoreSession } from './features/auth/authSlice';
 import { addTodo, deleteTodo, fetchTodos, updateTodo } from './features/todos/todosSlice';
 
 const statusOrder = ['backlog', 'active', 'review', 'mastered'];
@@ -28,7 +29,7 @@ const difficultyPalette = {
   hard: 'crimson'
 };
 
-const initialForm = {
+const initialTodoForm = {
   title: '',
   platform: 'LeetCode',
   topic: 'Arrays',
@@ -37,6 +38,11 @@ const initialForm = {
   difficulty: 'medium',
   eta: '30 min',
   notes: ''
+};
+
+const initialAuthForm = {
+  username: '',
+  pin: ''
 };
 
 const advanceStatus = (currentStatus) => {
@@ -51,24 +57,42 @@ const advanceStatus = (currentStatus) => {
 
 function App() {
   const dispatch = useDispatch();
-  const { items, status, error, storage } = useSelector((state) => state.todos);
+  const auth = useSelector((state) => state.auth);
+  const todos = useSelector((state) => state.todos);
 
-  const [form, setForm] = useState(initialForm);
+  const [authMode, setAuthMode] = useState('login');
+  const [authForm, setAuthForm] = useState(initialAuthForm);
+  const [todoForm, setTodoForm] = useState(initialTodoForm);
   const [search, setSearch] = useState('');
   const [topicFilter, setTopicFilter] = useState('all');
   const [difficultyFilter, setDifficultyFilter] = useState('all');
 
   const deferredSearch = useDeferredValue(search);
+  const isAuthenticated = auth.status === 'authenticated' && Boolean(auth.user) && Boolean(auth.token);
 
   useEffect(() => {
-    if (status === 'idle') {
+    if (auth.status === 'checking') {
+      dispatch(restoreSession());
+    }
+  }, [auth.status, dispatch]);
+
+  useEffect(() => {
+    if (isAuthenticated && todos.status === 'idle') {
       dispatch(fetchTodos());
     }
-  }, [dispatch, status]);
+  }, [dispatch, isAuthenticated, todos.status]);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setTodoForm(initialTodoForm);
+      setSearch('');
+      setTopicFilter('all');
+      setDifficultyFilter('all');
+    }
+  }, [isAuthenticated]);
 
   const searchValue = deferredSearch.trim().toLowerCase();
-
-  const filteredTodos = items.filter((todo) => {
+  const filteredTodos = todos.items.filter((todo) => {
     const matchesSearch =
       searchValue.length === 0 ||
       [todo.title, todo.platform, todo.topic, todo.language, todo.algorithm, todo.notes]
@@ -86,48 +110,92 @@ function App() {
     return groups;
   }, {});
 
-  const topicOptions = ['all', ...new Set(items.map((todo) => todo.topic))];
-
-  const mastered = items.filter((todo) => todo.status === 'mastered').length;
-  const active = items.filter((todo) => todo.status === 'active').length;
-  const review = items.filter((todo) => todo.status === 'review').length;
+  const topicOptions = ['all', ...new Set(todos.items.map((todo) => todo.topic))];
+  const mastered = todos.items.filter((todo) => todo.status === 'mastered').length;
+  const active = todos.items.filter((todo) => todo.status === 'active').length;
+  const review = todos.items.filter((todo) => todo.status === 'review').length;
   const stats = {
-    total: items.length,
+    total: todos.items.length,
     active,
     review,
-    completion: items.length === 0 ? 0 : Math.round((mastered / items.length) * 100)
+    completion: todos.items.length === 0 ? 0 : Math.round((mastered / todos.items.length) * 100)
   };
 
   const focusTodo =
-    items.find((todo) => todo.status === 'active') ??
-    items.find((todo) => todo.status === 'review') ??
-    items[0];
+    todos.items.find((todo) => todo.status === 'active') ??
+    todos.items.find((todo) => todo.status === 'review') ??
+    todos.items[0];
 
-  const handleFieldChange = (event) => {
+  const handleAuthModeChange = (mode) => {
+    setAuthMode(mode);
+    setAuthForm(initialAuthForm);
+    dispatch(clearAuthError());
+  };
+
+  const handleAuthFieldChange = (event) => {
     const { name, value } = event.target;
-    setForm((currentForm) => ({
+
+    setAuthForm((currentForm) => ({
+      ...currentForm,
+      [name]: name === 'pin' ? value.replace(/\D/g, '').slice(0, 4) : value
+    }));
+
+    if (auth.error) {
+      dispatch(clearAuthError());
+    }
+  };
+
+  const handleAuthSubmit = async (event) => {
+    event.preventDefault();
+
+    const payload = {
+      username: authForm.username.trim(),
+      pin: authForm.pin
+    };
+
+    if (!payload.username || payload.pin.length !== 4) {
+      return;
+    }
+
+    const action = authMode === 'register' ? registerUser : loginUser;
+
+    try {
+      await dispatch(action(payload)).unwrap();
+      setAuthForm(initialAuthForm);
+    } catch {
+      // Auth errors are already surfaced through Redux state.
+    }
+  };
+
+  const handleTodoFieldChange = (event) => {
+    const { name, value } = event.target;
+    setTodoForm((currentForm) => ({
       ...currentForm,
       [name]: value
     }));
   };
 
-  const handleSubmit = async (event) => {
+  const handleTodoSubmit = async (event) => {
     event.preventDefault();
 
-    if (!form.title.trim() || !form.algorithm.trim()) {
+    if (!todoForm.title.trim() || !todoForm.algorithm.trim()) {
       return;
     }
 
-    await dispatch(
-      addTodo({
-        ...form,
-        title: form.title.trim(),
-        algorithm: form.algorithm.trim(),
-        notes: form.notes.trim()
-      })
-    ).unwrap();
+    try {
+      await dispatch(
+        addTodo({
+          ...todoForm,
+          title: todoForm.title.trim(),
+          algorithm: todoForm.algorithm.trim(),
+          notes: todoForm.notes.trim()
+        })
+      ).unwrap();
 
-    setForm(initialForm);
+      setTodoForm(initialTodoForm);
+    } catch {
+      // Todo errors are already surfaced through Redux state.
+    }
   };
 
   const handleAdvance = (todo) => {
@@ -146,6 +214,141 @@ function App() {
     });
   };
 
+  const handleLogout = () => {
+    dispatch(logoutUser());
+  };
+
+  if (auth.status === 'checking') {
+    return (
+      <main className="app-shell auth-shell">
+        <div className="background-orb orb-left" />
+        <div className="background-orb orb-right" />
+        <section className="auth-layout">
+          <div className="scene-card auth-scene">
+            <SceneBackdrop />
+            <aside className="quest-panel auth-callout">
+              <span className="storage-pill memory">Restoring session</span>
+              <h2>Reopening your quest map</h2>
+              <p>Checking your saved explorer session so we can bring back the right algorithm board.</p>
+            </aside>
+          </div>
+
+          <section className="panel auth-panel auth-panel-loading">
+            <span className="eyebrow">One moment</span>
+            <h1 className="auth-title">Loading your private dashboard…</h1>
+            <p className="auth-copy">If the saved session has expired, you’ll land back on the sign-in gate.</p>
+          </section>
+        </section>
+      </main>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <main className="app-shell auth-shell">
+        <div className="background-orb orb-left" />
+        <div className="background-orb orb-right" />
+
+        <section className="auth-layout">
+          <div className="scene-card auth-scene">
+            <SceneBackdrop />
+            <aside className="quest-panel auth-callout">
+              <span className="storage-pill memory">Private quest boards</span>
+              <h2>One board per explorer</h2>
+              <p>
+                Create a username and a 4 digit PIN to keep your algorithm practice separated by user.
+              </p>
+
+              <div className="quest-stats">
+                <div>
+                  <strong>User based</strong>
+                  <span>separate todo maps</span>
+                </div>
+                <div>
+                  <strong>4 digit PIN</strong>
+                  <span>quick sign in</span>
+                </div>
+                <div>
+                  <strong>Redis ready</strong>
+                  <span>persists when available</span>
+                </div>
+              </div>
+            </aside>
+          </div>
+
+          <section className="panel auth-panel">
+            <div className="mode-toggle">
+              <button
+                className={authMode === 'login' ? 'active' : ''}
+                type="button"
+                onClick={() => handleAuthModeChange('login')}
+              >
+                Sign in
+              </button>
+              <button
+                className={authMode === 'register' ? 'active' : ''}
+                type="button"
+                onClick={() => handleAuthModeChange('register')}
+              >
+                Create user
+              </button>
+            </div>
+
+            <span className="eyebrow">{authMode === 'register' ? 'New Explorer' : 'Welcome Back'}</span>
+            <h1 className="auth-title">
+              {authMode === 'register' ? 'Claim your own algorithm camp.' : 'Enter your private quest board.'}
+            </h1>
+            <p className="auth-copy">
+              Each username gets a separate todo dashboard. Use any 4 digit PIN to protect it.
+            </p>
+
+            <form className="auth-form" onSubmit={handleAuthSubmit}>
+              <label>
+                Username
+                <input
+                  name="username"
+                  value={authForm.username}
+                  onChange={handleAuthFieldChange}
+                  placeholder="e.g. abhishek, dsa-scout, graphmaster"
+                  required
+                  minLength={3}
+                  maxLength={20}
+                />
+              </label>
+
+              <label>
+                4 digit PIN
+                <input
+                  name="pin"
+                  type="password"
+                  inputMode="numeric"
+                  pattern="\d{4}"
+                  value={authForm.pin}
+                  onChange={handleAuthFieldChange}
+                  placeholder="1234"
+                  maxLength={4}
+                  required
+                />
+              </label>
+
+              <div className="pin-help">Only numbers are allowed, and the PIN must be exactly 4 digits.</div>
+
+              <button className="primary-button auth-submit" disabled={auth.status === 'authenticating'} type="submit">
+                {auth.status === 'authenticating'
+                  ? 'Opening your board…'
+                  : authMode === 'register'
+                    ? 'Create explorer'
+                    : 'Enter board'}
+              </button>
+            </form>
+
+            {auth.error && <div className="auth-error">{auth.error}</div>}
+          </section>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="app-shell">
       <div className="background-orb orb-left" />
@@ -153,11 +356,21 @@ function App() {
 
       <section className="hero-card">
         <div className="hero-copy">
-          <div className="eyebrow">Algorithm Expedition Board</div>
-          <h1>Turn daily coding practice into a map of quests, camps, and summits.</h1>
+          <div className="hero-toolbar">
+            <div>
+              <div className="eyebrow">Algorithm Expedition Board</div>
+              <div className="user-chip">Explorer: {auth.user.username}</div>
+            </div>
+
+            <button className="ghost-button" type="button" onClick={handleLogout}>
+              Switch user
+            </button>
+          </div>
+
+          <h1>Turn daily coding practice into a private map of quests, camps, and summits.</h1>
           <p>
-            Manage DSA problems by topic, move each challenge through solving stages, and keep your
-            Redis-backed progress safe between sessions.
+            This board belongs to {auth.user.username}. Your tasks, progress, and solved patterns stay
+            scoped to this user account behind a 4 digit PIN.
           </p>
 
           <div className="stat-grid">
@@ -169,18 +382,12 @@ function App() {
         </div>
 
         <div className="scene-card">
-          <div className="scene-sky" />
-          <div className="scene-glow" />
-          <div className="scene-ridge ridge-back" />
-          <div className="scene-ridge ridge-mid" />
-          <div className="scene-ridge ridge-front" />
-          <div className="scene-path" />
-          <div className="floating-orb orb-one" />
-          <div className="floating-orb orb-two" />
-          <div className="floating-orb orb-three" />
+          <SceneBackdrop />
 
           <aside className="quest-panel">
-            <span className={`storage-pill ${storage}`}>{storage === 'redis' ? 'Redis live' : 'Memory fallback'}</span>
+            <span className={`storage-pill ${todos.storage}`}>
+              {todos.storage === 'redis' ? 'Redis live' : 'Memory fallback'}
+            </span>
             <h2>{focusTodo ? focusTodo.title : 'Choose the next route'}</h2>
             <p>
               {focusTodo
@@ -207,21 +414,21 @@ function App() {
       </section>
 
       <section className="dashboard-grid">
-        <form className="panel glass-panel form-panel" onSubmit={handleSubmit}>
+        <form className="panel glass-panel form-panel" onSubmit={handleTodoSubmit}>
           <div className="panel-header">
             <div>
               <span className="eyebrow">New Quest</span>
               <h2>Add an algorithm task</h2>
             </div>
-            <span className="badge">Focus + persist</span>
+            <span className="badge">User scoped</span>
           </div>
 
           <label>
             Problem title
             <input
               name="title"
-              value={form.title}
-              onChange={handleFieldChange}
+              value={todoForm.title}
+              onChange={handleTodoFieldChange}
               placeholder="e.g. Binary Tree Zigzag Level Order Traversal"
               required
             />
@@ -230,7 +437,7 @@ function App() {
           <div className="field-row">
             <label>
               Platform
-              <select name="platform" value={form.platform} onChange={handleFieldChange}>
+              <select name="platform" value={todoForm.platform} onChange={handleTodoFieldChange}>
                 <option>LeetCode</option>
                 <option>Codeforces</option>
                 <option>GeeksforGeeks</option>
@@ -241,7 +448,7 @@ function App() {
 
             <label>
               Topic
-              <select name="topic" value={form.topic} onChange={handleFieldChange}>
+              <select name="topic" value={todoForm.topic} onChange={handleTodoFieldChange}>
                 <option>Arrays</option>
                 <option>Strings</option>
                 <option>Trees</option>
@@ -257,7 +464,7 @@ function App() {
           <div className="field-row">
             <label>
               Language
-              <select name="language" value={form.language} onChange={handleFieldChange}>
+              <select name="language" value={todoForm.language} onChange={handleTodoFieldChange}>
                 <option>C++</option>
                 <option>Java</option>
                 <option>Python</option>
@@ -272,8 +479,8 @@ function App() {
               Algorithm name
               <input
                 name="algorithm"
-                value={form.algorithm}
-                onChange={handleFieldChange}
+                value={todoForm.algorithm}
+                onChange={handleTodoFieldChange}
                 placeholder="e.g. BFS, Sliding Window, Kadane's Algorithm"
                 required
               />
@@ -283,7 +490,7 @@ function App() {
           <div className="field-row">
             <label>
               Difficulty
-              <select name="difficulty" value={form.difficulty} onChange={handleFieldChange}>
+              <select name="difficulty" value={todoForm.difficulty} onChange={handleTodoFieldChange}>
                 <option value="easy">Easy</option>
                 <option value="medium">Medium</option>
                 <option value="hard">Hard</option>
@@ -292,7 +499,7 @@ function App() {
 
             <label>
               Time box
-              <input name="eta" value={form.eta} onChange={handleFieldChange} placeholder="45 min" />
+              <input name="eta" value={todoForm.eta} onChange={handleTodoFieldChange} placeholder="45 min" />
             </label>
           </div>
 
@@ -300,8 +507,8 @@ function App() {
             Notes
             <textarea
               name="notes"
-              value={form.notes}
-              onChange={handleFieldChange}
+              value={todoForm.notes}
+              onChange={handleTodoFieldChange}
               placeholder="Add hints, patterns to revisit, or edge cases to test."
             />
           </label>
@@ -356,9 +563,9 @@ function App() {
 
           <div className="insight-list">
             <InsightCard
-              title="Active focus"
-              value={`${stats.active} quest${stats.active === 1 ? '' : 's'}`}
-              description="Keep only a few hard problems in the deep work lane at once."
+              title="Explorer"
+              value={auth.user.username}
+              description="Only this user can see and move the quests on this board."
             />
             <InsightCard
               title="Review rhythm"
@@ -367,8 +574,8 @@ function App() {
             />
             <InsightCard
               title="Persistence"
-              value={storage === 'redis' ? 'Redis connected' : 'Running on fallback'}
-              description="Start Redis to keep your data durable across server restarts."
+              value={todos.storage === 'redis' ? 'Redis connected' : 'Running on fallback'}
+              description="Start Redis to keep this user’s data durable across server restarts."
             />
           </div>
         </section>
@@ -439,9 +646,25 @@ function App() {
         ))}
       </section>
 
-      {status === 'loading' && <div className="floating-message">Loading your quest board…</div>}
-      {error && <div className="floating-message error-message">{error}</div>}
+      {todos.status === 'loading' && <div className="floating-message">Loading your quest board…</div>}
+      {todos.error && <div className="floating-message error-message">{todos.error}</div>}
     </main>
+  );
+}
+
+function SceneBackdrop() {
+  return (
+    <>
+      <div className="scene-sky" />
+      <div className="scene-glow" />
+      <div className="scene-ridge ridge-back" />
+      <div className="scene-ridge ridge-mid" />
+      <div className="scene-ridge ridge-front" />
+      <div className="scene-path" />
+      <div className="floating-orb orb-one" />
+      <div className="floating-orb orb-two" />
+      <div className="floating-orb orb-three" />
+    </>
   );
 }
 

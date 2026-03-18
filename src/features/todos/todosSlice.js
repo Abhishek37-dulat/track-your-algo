@@ -1,4 +1,6 @@
 import { createAsyncThunk, createSlice } from '@reduxjs/toolkit';
+import { loginUser, logoutUser, registerUser, restoreSession } from '../auth/authSlice';
+import { apiRequest } from '../../lib/api';
 
 const sortTodos = (todos) =>
   [...todos].sort((left, right) => {
@@ -19,53 +21,54 @@ const sortTodos = (todos) =>
     return new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime();
   });
 
-const request = async (url, options = {}) => {
-  const response = await fetch(url, {
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    ...options
-  });
+const getToken = (getState) => getState().auth.token;
 
-  const data = await response.json();
+export const fetchTodos = createAsyncThunk('todos/fetchTodos', async (_, { getState }) =>
+  apiRequest('/api/todos', {
+    token: getToken(getState)
+  })
+);
 
-  if (!response.ok) {
-    throw new Error(data.error || 'Request failed');
-  }
+export const addTodo = createAsyncThunk('todos/addTodo', async (todo, { getState }) =>
+  apiRequest('/api/todos', {
+    method: 'POST',
+    body: JSON.stringify(todo),
+    token: getToken(getState)
+  })
+);
 
-  return data;
+export const updateTodo = createAsyncThunk('todos/updateTodo', async ({ id, changes }, { getState }) =>
+  apiRequest(`/api/todos/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(changes),
+    token: getToken(getState)
+  })
+);
+
+export const deleteTodo = createAsyncThunk('todos/deleteTodo', async (id, { getState }) =>
+  apiRequest(`/api/todos/${id}`, {
+    method: 'DELETE',
+    token: getToken(getState)
+  })
+);
+
+const initialState = {
+  items: [],
+  status: 'idle',
+  error: null,
+  storage: 'memory'
 };
 
-export const fetchTodos = createAsyncThunk('todos/fetchTodos', async () => request('/api/todos'));
-
-export const addTodo = createAsyncThunk('todos/addTodo', async (todo) =>
-  request('/api/todos', {
-    method: 'POST',
-    body: JSON.stringify(todo)
-  })
-);
-
-export const updateTodo = createAsyncThunk('todos/updateTodo', async ({ id, changes }) =>
-  request(`/api/todos/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify(changes)
-  })
-);
-
-export const deleteTodo = createAsyncThunk('todos/deleteTodo', async (id) =>
-  request(`/api/todos/${id}`, {
-    method: 'DELETE'
-  })
-);
+const resetTodosState = (state) => {
+  state.items = [];
+  state.status = 'idle';
+  state.error = null;
+  state.storage = 'memory';
+};
 
 const todosSlice = createSlice({
   name: 'todos',
-  initialState: {
-    items: [],
-    status: 'idle',
-    error: null,
-    storage: 'memory'
-  },
+  initialState,
   reducers: {},
   extraReducers: (builder) => {
     builder
@@ -96,6 +99,11 @@ const todosSlice = createSlice({
         state.items = sortTodos(state.items.filter((todo) => todo.id !== action.payload.id));
         state.storage = action.payload.storage;
       })
+      .addCase(registerUser.fulfilled, resetTodosState)
+      .addCase(loginUser.fulfilled, resetTodosState)
+      .addCase(restoreSession.fulfilled, resetTodosState)
+      .addCase(restoreSession.rejected, resetTodosState)
+      .addCase(logoutUser.fulfilled, resetTodosState)
       .addMatcher(
         (action) =>
           action.type.startsWith('todos/') &&
