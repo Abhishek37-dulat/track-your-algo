@@ -1,6 +1,32 @@
 services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      NODE_ENV: production
+      PORT: 8787
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "8787:8787"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
   redis:
     image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
     ports:
       - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
     restart: unless-stopped
+
+volumes:
+  redis-data:
